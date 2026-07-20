@@ -301,7 +301,7 @@ def _fig_h1a_comparison(rows, out_dir, plt):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
                 f"{val:.4f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
     ax.set_ylabel("Jain Fairness Index", fontsize=12)
-    ax.set_title("H1a: Fairness Under 32:1 Cost Skew (n=10 agents)", fontsize=11)
+    ax.set_title(r"H1a: Fairness Under $\approx$31:1 Cost Skew (n=10 agents)", fontsize=11)
     ax.legend()
     ax.set_ylim(0, 1.15)
 
@@ -373,7 +373,7 @@ def _fig_prop2_ablation(rows, out_dir, plt):
 def _fig_workload_summary(rows, out_dir, plt):
     """H1a Jain for all workloads under RVT n=10."""
     wl_order = ["uniform", "skewed", "adversarial", "heavytail", "mixed", "tworesource"]
-    wl_labels = ["Uniform", "Skewed\n(32:1)", "Adversarial", "Heavy\nTail", "Mixed\nPrio", "Two\nResource"]
+    wl_labels = ["Uniform", "Skewed\n(~31:1)", "Adversarial", "Heavy\nTail", "Mixed\nPrio", "Two\nResource"]
 
     jains = []
     for wl in wl_order:
