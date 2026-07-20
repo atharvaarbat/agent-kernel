@@ -1,0 +1,9 @@
+metric,value
+workload,0
+n_agents,10
+total_calls,500
+seed,42
+jain_index,0.995028
+p50_latency_s,1.226060
+p99_latency_s,7.372001
+starvation_events,0
