@@ -1,0 +1,90 @@
+{
+  "h0a": {
+    "10": {
+      "overhead_ns": 1846.9,
+      "wall_pct": 9.2e-05,
+      "token_pct": 0.468382,
+      "h0a_pass": true
+    },
+    "50": {
+      "overhead_ns": 4171.97,
+      "wall_pct": 0.000209,
+      "token_pct": 2.341911,
+      "h0a_pass": true
+    }
+  },
+  "h1a_skewed": {
+    "rvt_n2": {
+      "jain_mean": 0.999998,
+      "gap_ratio_mean": 0.6666,
+      "thm1_satisfied": true,
+      "n_runs": 1
+    },
+    "rvt_n10": {
+      "jain_mean": 0.9997651428571429,
+      "gap_ratio_mean": 0.7142285714285714,
+      "thm1_satisfied": true,
+      "n_runs": 7
+    },
+    "rvt_n50": {
+      "jain_mean": 0.998619,
+      "gap_ratio_mean": 0.6666,
+      "thm1_satisfied": true,
+      "n_runs": 1
+    },
+    "fcfs_n2": {
+      "jain_mean": 0.530931,
+      "gap_ratio_mean": 1211.315,
+      "thm1_satisfied": false,
+      "n_runs": 1
+    },
+    "fcfs_n10": {
+      "jain_mean": 0.161751,
+      "gap_ratio_mean": 242.3844,
+      "thm1_satisfied": false,
+      "n_runs": 1
+    },
+    "fcfs_n50": {
+      "jain_mean": 0.120883,
+      "gap_ratio_mean": 48.5189,
+      "thm1_satisfied": false,
+      "n_runs": 1
+    },
+    "rr_n2": {
+      "jain_mean": 0.530931,
+      "gap_ratio_mean": 1211.315,
+      "thm1_satisfied": false,
+      "n_runs": 1
+    },
+    "rr_n10": {
+      "jain_mean": 0.161751,
+      "gap_ratio_mean": 242.3844,
+      "thm1_satisfied": false,
+      "n_runs": 1
+    },
+    "rr_n50": {
+      "jain_mean": 0.120883,
+      "gap_ratio_mean": 48.5189,
+      "thm1_satisfied": false,
+      "n_runs": 1
+    }
+  },
+  "seed_robustness": {
+    "sched": "rvt",
+    "workload": "skewed",
+    "n": 10,
+    "seeds": [
+      123,
+      2024,
+      42,
+      7777,
+      999
+    ],
+    "jain_min": 0.999737,
+    "jain_max": 0.999788
+  },
+  "prop2_ablation": {
+    "with_reconcile": 0.6666,
+    "without_reconcile": 1.0
+  }
+}

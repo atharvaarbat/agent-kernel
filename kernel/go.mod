@@ -1,4 +1,4 @@
-module github.com/atharva-arbat/agent-kernel
+module github.com/atharvaarbat/agent-kernel
 
 go 1.23
 

@@ -7,9 +7,9 @@ import (
 	"container/heap"
 	"math/rand"
 
-	"github.com/atharva-arbat/agent-kernel/metrics"
-	"github.com/atharva-arbat/agent-kernel/mock"
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/metrics"
+	"github.com/atharvaarbat/agent-kernel/mock"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 )
 
 // ─── event queue ─────────────────────────────────────────────────────────────
@@ -22,14 +22,14 @@ const (
 )
 
 type event struct {
-	time       float64 // simulation seconds
-	kind       eventKind
-	agentID    scheduler.AgentID
-	callID     int64
-	actualCost float64
-	latency    float64 // time from dispatch to completion (seconds)
-	call       *scheduler.Call
-	index      int // heap position
+	time    float64 // simulation seconds
+	kind    eventKind
+	agentID scheduler.AgentID
+	callID  int64
+	actual  float64 // actual cost (token-denominated)
+	latency float64 // wall-clock seconds from dispatch to completion
+	call    *scheduler.Call
+	index   int // heap position
 }
 
 type eventHeap []*event
@@ -55,98 +55,54 @@ type Sched interface {
 	Stats() map[scheduler.AgentID]*scheduler.AgentStats
 }
 
-// ─── dispatcher (bridges scheduler → sim event queue) ────────────────────────
-
-// simDispatcher is used by the RVT scheduler; when Dispatch is called it schedules
-// a future Complete event in the simulation event queue.
-type simDispatcher struct {
-	sim *Simulation
-}
-
-func (d *simDispatcher) Dispatch(agentID scheduler.AgentID, call *scheduler.Call) error {
-	lat := d.sim.provider.SampleLatency(d.sim.rng)
-	actual := d.sim.provider.SampleActualCost(d.sim.rng, call)
-	heap.Push(&d.sim.events, &event{
-		time:       d.sim.now + lat,
-		kind:       evComplete,
-		agentID:    agentID,
-		callID:     call.ID,
-		actualCost: actual,
-		latency:    lat,
-		call:       call,
-	})
-	return nil
-}
-
 // ─── Workload ────────────────────────────────────────────────────────────────
 
 // WorkloadKind selects the six §7.2 workloads.
 type WorkloadKind int
 
 const (
-	WorkloadUniform      WorkloadKind = iota // §7.2: uniform demand
-	WorkloadSkewed                           // 10:1 demand skew
-	WorkloadAdversarial                      // adversarial bursts (one agent max-cost)
-	WorkloadHeavyTail                        // heavy-tailed output lengths
-	WorkloadMixedPrio                        // mixed priority with starvation-inducing low-prio
-	WorkloadTwoResource                      // two-resource bottleneck
+	WorkloadUniform     WorkloadKind = iota // §7.2: uniform demand, uniform weights
+	WorkloadSkewed                          // 10:1 demand skew, equal weights
+	WorkloadAdversarial                     // agent 0 always submits max-cost calls
+	WorkloadHeavyTail                       // heavier-tailed output lengths (σ=2.5)
+	WorkloadMixedPrio                       // mixed weights (3:1), high-weight agents demand 3×
+	WorkloadTwoResource                     // two-resource bottleneck (even-ID agents 3× latency)
 )
 
 // AgentConfig describes one agent in the experiment.
 type AgentConfig struct {
-	ID       scheduler.AgentID
-	Weight   float64
-	CallsPerEpoch int // calls submitted per epoch (for demand-skew workloads)
+	ID            scheduler.AgentID
+	Weight        float64
+	CallsPerEpoch int // informational; not used directly by sim
 }
 
 // Config configures one simulation run.
 type Config struct {
-	Workload     WorkloadKind
-	Agents       []AgentConfig
-	TotalCalls   int           // stop after this many completions
-	EpochLen     float64       // epoch length in seconds (for rate-limit windows)
-	MockConfig   mock.Config
-	Seed         int64
-	MaxD         int
-	ReconcileEnabled bool
+	Workload          WorkloadKind
+	Agents            []AgentConfig
+	TotalCalls        int     // stop after this many completions
+	EpochLen          float64 // epoch length in seconds (informational)
+	MockConfig        mock.Config
+	Seed              int64
+	MaxD              int
+	GlobalConcurrency int // shared provider concurrency cap (0 = unlimited)
+	ReconcileEnabled  bool
 }
 
 // ─── Simulation ──────────────────────────────────────────────────────────────
 
 // Simulation drives one experiment run to completion.
 type Simulation struct {
-	cfg        Config
-	sched      Sched
-	provider   *mock.Provider
-	rng        *rand.Rand
-	events     eventHeap
-	now        float64
-	collector  *metrics.Collector
-	completions int
-	callsLeft  map[scheduler.AgentID]int
-}
-
-// New creates a Simulation. The returned *Simulation must have its scheduler set via
-// the returned *simDispatcher before calling Run.
-func New(cfg Config, rvtSched *scheduler.Scheduler) *Simulation {
-	rng := rand.New(rand.NewSource(cfg.Seed))
-	prov := mock.New(cfg.MockConfig)
-	disp := &simDispatcher{}
-	// Wire the scheduler's dispatcher to this simulation.
-	// (rvtSched was created by the caller; we replace its dispatcher here.)
-	// Since New() in scheduler package takes the dispatcher at construction,
-	// we use the RVT scheduler as-is and provide a wrapper.
-	sim := &Simulation{
-		cfg:       cfg,
-		sched:     rvtSched,
-		provider:  prov,
-		rng:       rng,
-		collector: metrics.NewCollector(len(cfg.Agents)),
-		callsLeft: make(map[scheduler.AgentID]int),
-	}
-	disp.sim = sim
-	heap.Init(&sim.events)
-	return sim
+	cfg           Config
+	sched         Sched
+	provider      *mock.Provider
+	heavyProvider *mock.Provider // WorkloadHeavyTail: σ=2.5
+	rng           *rand.Rand
+	events        eventHeap
+	now           float64
+	collector     *metrics.Collector
+	completions   int
+	callsLeft     map[scheduler.AgentID]int
 }
 
 // NewWithDispatcher creates a Simulation and returns both the sim and its dispatcher
@@ -154,26 +110,104 @@ func New(cfg Config, rvtSched *scheduler.Scheduler) *Simulation {
 func NewWithDispatcher(cfg Config) (*Simulation, *SimDispatcher) {
 	rng := rand.New(rand.NewSource(cfg.Seed))
 	prov := mock.New(cfg.MockConfig)
+
+	heavyCfg := cfg.MockConfig
+	heavyCfg.LogNormalSigma = 2.5
+	heavyProv := mock.New(heavyCfg)
+
+	cmax := cfg.MockConfig.CMax
+	d := float64(cfg.MaxD)
+
 	sim := &Simulation{
-		cfg:       cfg,
-		provider:  prov,
-		rng:       rng,
-		collector: metrics.NewCollector(len(cfg.Agents)),
-		callsLeft: make(map[scheduler.AgentID]int),
+		cfg:           cfg,
+		provider:      prov,
+		heavyProvider: heavyProv,
+		rng:           rng,
+		collector:     metrics.NewCollector(len(cfg.Agents), cmax, cmax, d),
+		callsLeft:     make(map[scheduler.AgentID]int),
 	}
 	heap.Init(&sim.events)
-	disp := &SimDispatcher{sim: sim}
-	return sim, disp
+	return sim, &SimDispatcher{sim: sim}
 }
 
 // SetSched sets the scheduler after construction (used with NewWithDispatcher).
 func (s *Simulation) SetSched(sched Sched) { s.sched = sched }
 
-// Run executes the simulation until cfg.TotalCalls completions.
+// Now returns the current simulation time.
+func (s *Simulation) Now() float64 { return s.now }
+
+// ─── workload helpers ────────────────────────────────────────────────────────
+
+// callBudget returns the total number of calls this agent will submit during the run.
+// For workloads that require continuous backlog (cost-skew workloads), every agent
+// gets a full TotalCalls budget so no agent exhausts while others are still active —
+// the VTime ordering alone determines the actual call-count distribution.
+func (s *Simulation) callBudget(ag AgentConfig) int {
+	base := s.cfg.TotalCalls / len(s.cfg.Agents)
+	switch s.cfg.Workload {
+	case WorkloadSkewed, WorkloadAdversarial:
+		// Unlimited budget: simulation stops by total-completions counter, not budget.
+		return s.cfg.TotalCalls
+	case WorkloadMixedPrio:
+		if ag.Weight > 1.0 {
+			return int(float64(base) * ag.Weight)
+		}
+	}
+	return base
+}
+
+// generateCall returns a workload-appropriate call for the given agent.
+// WorkloadSkewed / WorkloadAdversarial: agent[0] submits max-cost calls (cost=CMax);
+// other agents submit cheap calls (MaxTokens=50 → cost ≈ 160 tokens), giving ~30:1
+// cost ratio so VTime-based fairness is clearly visible against FCFS/RR.
+func (s *Simulation) generateCall(agentID scheduler.AgentID) *scheduler.Call {
+	call := s.provider.GenerateCall(s.rng, agentID)
+	isFirst := agentID == s.cfg.Agents[0].ID
+	switch s.cfg.Workload {
+	case WorkloadSkewed, WorkloadAdversarial:
+		if isFirst {
+			call.MaxTokens = int64(s.cfg.MockConfig.CMax / s.cfg.MockConfig.Beta)
+			call.InTokens = 50
+		} else {
+			call.InTokens = 10
+			call.MaxTokens = 50 // capped output → cost ≈ 10+3×50=160 tokens
+		}
+	}
+	return call
+}
+
+// latencyForAgent samples the service time for a dispatched call.
+// WorkloadTwoResource gives even-ID agents 3× latency (resource-bottleneck model).
+func (s *Simulation) latencyForAgent(agentID scheduler.AgentID) float64 {
+	lat := s.provider.SampleLatency(s.rng)
+	if s.cfg.Workload == WorkloadTwoResource && int(agentID)%2 == 0 {
+		lat *= 3.0
+	}
+	return lat
+}
+
+// actualCostForAgent samples the actual token cost for a dispatched call.
+// WorkloadSkewed/Adversarial: agent[0] costs CMax; others use the (cheap) call params.
+// WorkloadHeavyTail: all agents use the heavy-tail provider.
+func (s *Simulation) actualCostForAgent(agentID scheduler.AgentID, call *scheduler.Call) float64 {
+	switch s.cfg.Workload {
+	case WorkloadSkewed, WorkloadAdversarial:
+		if agentID == s.cfg.Agents[0].ID {
+			return s.cfg.MockConfig.CMax // always 5000
+		}
+		return s.provider.SampleActualCost(s.rng, call) // cheap (≈160, capped at MaxTokens=50)
+	case WorkloadHeavyTail:
+		return s.heavyProvider.SampleActualCost(s.rng, call)
+	}
+	return s.provider.SampleActualCost(s.rng, call)
+}
+
+// ─── Run ─────────────────────────────────────────────────────────────────────
+
+// Run executes the simulation until cfg.TotalCalls completions, then returns a Summary.
 func (s *Simulation) Run() *metrics.Summary {
-	// Seed initial calls for all agents.
 	for _, ag := range s.cfg.Agents {
-		s.callsLeft[ag.ID] = s.cfg.TotalCalls / len(s.cfg.Agents)
+		s.callsLeft[ag.ID] = s.callBudget(ag)
 		s.submitNext(ag.ID)
 	}
 
@@ -183,32 +217,32 @@ func (s *Simulation) Run() *metrics.Summary {
 
 		switch ev.kind {
 		case evComplete:
-			_ = s.sched.Complete(ev.agentID, ev.callID, ev.actualCost)
+			// Pre-queue the next call before freeing the slot so tryDispatchAll
+			// sees the completing agent's next call when selecting the winner.
+			// Without this, n=2 always alternates regardless of VTime ordering.
+			s.submitNext(ev.agentID)
+			_ = s.sched.Complete(ev.agentID, ev.callID, ev.actual)
 			s.completions++
 			s.collector.RecordCompletion(s.now, ev.agentID, ev.latency, s.sched.Stats())
-			s.submitNext(ev.agentID)
 
 		case evSubmit:
 			_ = s.sched.Submit(ev.agentID, ev.call)
 		}
 	}
 
-	return s.collector.Summary(s.cfg.MockConfig.CMax, s.cfg.MockConfig.CMax,
-		float64(s.cfg.MaxD))
+	return s.collector.Summary()
 }
 
-// submitNext schedules the agent's next call if it still has calls remaining.
+// submitNext queues the agent's next call immediately if quota remains.
 func (s *Simulation) submitNext(agentID scheduler.AgentID) {
 	if s.callsLeft[agentID] > 0 {
 		s.callsLeft[agentID]--
-		call := s.provider.GenerateCall(s.rng, agentID)
-		// Submit immediately (zero think-time = continuously backlogged).
+		call := s.generateCall(agentID)
 		_ = s.sched.Submit(agentID, call)
 	}
 }
 
-// Now returns the current simulation time.
-func (s *Simulation) Now() float64 { return s.now }
+// ─── SimDispatcher ────────────────────────────────────────────────────────────
 
 // SimDispatcher satisfies scheduler.Dispatcher and feeds completions back into the sim.
 type SimDispatcher struct {
@@ -216,16 +250,16 @@ type SimDispatcher struct {
 }
 
 func (d *SimDispatcher) Dispatch(agentID scheduler.AgentID, call *scheduler.Call) error {
-	lat := d.sim.provider.SampleLatency(d.sim.rng)
-	actual := d.sim.provider.SampleActualCost(d.sim.rng, call)
+	lat := d.sim.latencyForAgent(agentID)
+	actual := d.sim.actualCostForAgent(agentID, call)
 	heap.Push(&d.sim.events, &event{
-		time:       d.sim.now + lat,
-		kind:       evComplete,
-		agentID:    agentID,
-		callID:     call.ID,
-		actualCost: actual,
-		latency:    lat,
-		call:       call,
+		time:    d.sim.now + lat,
+		kind:    evComplete,
+		agentID: agentID,
+		callID:  call.ID,
+		actual:  actual,
+		latency: lat,
+		call:    call,
 	})
 	return nil
 }

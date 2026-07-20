@@ -1,0 +1,9 @@
+metric,value
+n_agents,10
+total_calls,100000
+direct_ns_per_call,0.00
+mediated_ns_per_call,1846.90
+overhead_ns_per_call,1846.90
+wall_overhead_pct,0.000092
+token_overhead_pct,0.468382
+h0a_pass,true

@@ -7,7 +7,7 @@ import (
 	"math"
 	"math/rand"
 
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 )
 
 // Config parameterizes the mock provider distribution.

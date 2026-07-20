@@ -5,7 +5,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 )
 
 // ─── Jain's fairness index ────────────────────────────────────────────────────
@@ -38,11 +38,9 @@ type GapResult struct {
 }
 
 // ComputeGap computes the worst-case pairwise service gap among agents and compares
-// it to the Theorem 1 bound parameterized by (cmax, emax, d).
+// it to the Theorem 1 bound parameterised by (cmax, emax, d).
 func ComputeGap(stats map[scheduler.AgentID]*scheduler.AgentStats, cmax, emax, d float64) GapResult {
-	type entry struct {
-		w, a float64
-	}
+	type entry struct{ w, a float64 }
 	var agents []entry
 	for _, ag := range stats {
 		if ag.InBacklog || ag.Service > 0 {
@@ -56,6 +54,9 @@ func ComputeGap(stats map[scheduler.AgentID]*scheduler.AgentStats, cmax, emax, d
 	var maxGap, worstBound float64
 	for i, ai := range agents {
 		for _, aj := range agents[i+1:] {
+			if ai.w <= 0 || aj.w <= 0 {
+				continue
+			}
 			gapIJ := ai.a/ai.w - aj.a/aj.w
 			gapJI := aj.a/aj.w - ai.a/ai.w
 			boundIJ := d * (cmax/ai.w + emax/aj.w)
@@ -79,7 +80,7 @@ func ComputeGap(stats map[scheduler.AgentID]*scheduler.AgentStats, cmax, emax, d
 
 // ─── Latency percentiles ──────────────────────────────────────────────────────
 
-// Percentile returns the p-th percentile (0–100) of latencies in seconds.
+// Percentile returns the p-th percentile (0–100) of latencies.
 func Percentile(latencies []float64, p float64) float64 {
 	if len(latencies) == 0 {
 		return 0
@@ -93,76 +94,121 @@ func Percentile(latencies []float64, p float64) float64 {
 	if lo == hi {
 		return s[lo]
 	}
-	frac := idx - float64(lo)
-	return s[lo]*(1-frac) + s[hi]*frac
+	return s[lo]*(1-(idx-float64(lo))) + s[hi]*(idx-float64(lo))
 }
 
-// ─── Collector (records per-event metrics during simulation) ──────────────────
+// ─── Collector ────────────────────────────────────────────────────────────────
 
-// Collector accumulates per-event data and produces a Summary at the end.
+// Collector accumulates per-event data and produces a Summary at end of run.
 type Collector struct {
-	n          int
-	latencies  []float64
-	services   map[scheduler.AgentID][]float64 // per-agent service snapshots
-	gapHistory []GapResult
-	starvation int // completions where some backlogged agent waited >N epochs
+	n         int
+	cmax      float64
+	emax      float64
+	d         float64
+	latencies []float64
+
+	// Snapshot of last known stats per agent (retains actual weights).
+	lastStats map[scheduler.AgentID]*scheduler.AgentStats
+
+	// Running max of gap/bound across all snapshots (for H1b).
+	maxGapRatio float64
+
+	// Starvation: count of completions where ≥1 backlogged agent waited >threshold.
+	starvation      int
+	completionCount int
+	lastServed      map[scheduler.AgentID]int // completion index when agent was last dispatched
 }
 
-// NewCollector creates a Collector for n agents.
-func NewCollector(n int) *Collector {
+// NewCollector creates a Collector. cmax/emax/d are the Theorem 1 parameters used
+// to compute the gap bound incrementally at each completion.
+func NewCollector(n int, cmax, emax, d float64) *Collector {
 	return &Collector{
-		n:        n,
-		services: make(map[scheduler.AgentID][]float64),
+		n:          n,
+		cmax:       cmax,
+		emax:       emax,
+		d:          d,
+		lastStats:  make(map[scheduler.AgentID]*scheduler.AgentStats),
+		lastServed: make(map[scheduler.AgentID]int),
 	}
 }
 
-// RecordCompletion is called after each Complete event.
-func (c *Collector) RecordCompletion(simTime float64, agentID scheduler.AgentID,
-	latency float64, stats map[scheduler.AgentID]*scheduler.AgentStats) {
+const starveThresholdMul = 3 // starved if not served in n*3 completions
+
+// RecordCompletion is called after each Complete event with the current stats snapshot.
+func (c *Collector) RecordCompletion(
+	_ float64,
+	_ scheduler.AgentID,
+	latency float64,
+	stats map[scheduler.AgentID]*scheduler.AgentStats,
+) {
 	c.latencies = append(c.latencies, latency)
-	for id, ag := range stats {
-		c.services[id] = append(c.services[id], ag.Service/ag.Weight)
-	}
-}
+	c.completionCount++
 
-// Summary computes aggregate statistics over the collected data.
-func (c *Collector) Summary(cmax, emax, d float64) *Summary {
-	// Build allocation vector for Jain index (last snapshot per agent).
-	allocs := make([]float64, 0, c.n)
-	for _, vs := range c.services {
-		if len(vs) > 0 {
-			allocs = append(allocs, vs[len(vs)-1])
+	// Track last-dispatched index for starvation detection.
+	for id, ag := range stats {
+		c.lastStats[id] = ag
+		if ag.InFlight > 0 {
+			c.lastServed[id] = c.completionCount
 		}
 	}
 
-	// Compute latest gap (simplified: uses last recorded services).
-	latestStats := make(map[scheduler.AgentID]*scheduler.AgentStats)
-	for id, vs := range c.services {
-		if len(vs) > 0 {
-			latestStats[id] = &scheduler.AgentStats{
-				ID:      id,
-				Weight:  1.0, // weight info not recorded here; use 1.0 as placeholder
-				Service: vs[len(vs)-1],
+	// Starvation: any backlogged agent not served in n*starveThresholdMul completions.
+	threshold := c.n * starveThresholdMul
+	if threshold < 10 {
+		threshold = 10
+	}
+	for id, ag := range stats {
+		if ag.QueueLen > 0 && ag.InFlight == 0 {
+			last, seen := c.lastServed[id]
+			if !seen || c.completionCount-last > threshold {
+				c.starvation++
+				c.lastServed[id] = c.completionCount // reset to avoid double-counting
 			}
 		}
 	}
 
+	// Gap ratio update.
+	if len(stats) >= 2 {
+		gr := ComputeGap(stats, c.cmax, c.emax, c.d)
+		if gr.Normalized > c.maxGapRatio {
+			c.maxGapRatio = gr.Normalized
+		}
+	}
+}
+
+// Summary computes aggregate statistics over the collected data.
+func (c *Collector) Summary() *Summary {
+	// Jain index: use A_i/w_i for each agent (normalized allocation).
+	allocs := make([]float64, 0, len(c.lastStats))
+	for _, ag := range c.lastStats {
+		if ag.Weight > 0 && ag.Service > 0 {
+			allocs = append(allocs, ag.Service/ag.Weight)
+		}
+	}
+
+	// Final gap ratio snapshot.
+	finalGR := ComputeGap(c.lastStats, c.cmax, c.emax, c.d)
+	maxRatio := c.maxGapRatio
+	if finalGR.Normalized > maxRatio {
+		maxRatio = finalGR.Normalized
+	}
+
 	return &Summary{
-		JainIndex:  JainIndex(allocs),
-		P50Latency: Percentile(c.latencies, 50),
-		P99Latency: Percentile(c.latencies, 99),
-		Starvation: c.starvation,
-		GapHistory: c.gapHistory,
+		JainIndex:     JainIndex(allocs),
+		P50Latency:    Percentile(c.latencies, 50),
+		P99Latency:    Percentile(c.latencies, 99),
+		Starvation:    c.starvation,
+		MaxGapRatio:   maxRatio,
+		Thm1Satisfied: maxRatio <= 1.0+1e-9,
 	}
 }
 
 // Summary is the final output of one simulation run.
 type Summary struct {
-	JainIndex  float64
-	P50Latency float64 // seconds
-	P99Latency float64 // seconds
-	Starvation int     // count of epochs with at least one starved agent
-	GapHistory []GapResult
-	// Thm1Satisfied: true if MaxGap/Bound ≤ 1 for all snapshots.
-	Thm1Satisfied bool
+	JainIndex     float64
+	P50Latency    float64 // seconds
+	P99Latency    float64 // seconds
+	Starvation    int     // count of starvation events (§H1c)
+	MaxGapRatio   float64 // max(gap/bound) across all snapshots (§H1b)
+	Thm1Satisfied bool    // true iff MaxGapRatio ≤ 1 (Theorem 1 not violated)
 }

@@ -1,14 +1,22 @@
 package scheduler_test
 
 import (
+	"flag"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"testing"
 
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 	"pgregory.net/rapid"
 )
+
+// TestMain sets the rapid check count to 10 000 (PLAN.md §P3 gate) and runs the suite.
+func TestMain(m *testing.M) {
+	flag.Set("rapid.checks", "10000") //nolint:errcheck
+	os.Exit(m.Run())
+}
 
 // ─── test helpers ────────────────────────────────────────────────────────────
 
@@ -37,10 +45,13 @@ func (r *recordDispatcher) Dispatch(agentID scheduler.AgentID, call *scheduler.C
 
 // deferredDispatcher records dispatches for the test to complete manually.
 type deferredDispatcher struct {
-	sched      *scheduler.Scheduler
-	pending    []pendingCall
+	sched   *scheduler.Scheduler
+	pending []pendingCall
 }
-type pendingCall struct{ agentID scheduler.AgentID; call *scheduler.Call }
+type pendingCall struct {
+	agentID scheduler.AgentID
+	call    *scheduler.Call
+}
 
 func (d *deferredDispatcher) Dispatch(agentID scheduler.AgentID, call *scheduler.Call) error {
 	d.pending = append(d.pending, pendingCall{agentID, call})
@@ -142,6 +153,7 @@ func TestFigure2(t *testing.T) {
 
 // TestLemma1Property checks that w_i*(F_i−F_i0) = (A_i−A_i0)+(P_i−P_i0) holds
 // at every state for every agent after every event.
+// Runs 10 000 randomised cases — the PLAN.md trust gate (§P3).
 func TestLemma1Property(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		n := rapid.IntRange(2, 6).Draw(rt, "n")
@@ -185,6 +197,7 @@ func TestLemma1Property(t *testing.T) {
 
 // TestTheorem1Property verifies that the service gap A_i/w_i − A_j/w_j never
 // exceeds d*(C_max/w_i + Ê_max/w_j) for any pair of continuously backlogged agents.
+// Runs 10 000 randomised cases — the PLAN.md trust gate (§P3).
 func TestTheorem1Property(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		n := rapid.IntRange(2, 8).Draw(rt, "n")
@@ -269,7 +282,7 @@ func TestProposition3Tightness(t *testing.T) {
 	stats := sched.Stats()
 	a1 := stats[1].Service / stats[1].Weight // A_1 = C_max
 	a2 := stats[2].Service / stats[2].Weight // A_2 = c_min
-	gap := a1 - a2                            // C_max − c_min
+	gap := a1 - a2                           // C_max − c_min
 
 	if math.Abs(gap-(cmax-cmin)) > 1e-9 {
 		t.Errorf("Prop3: gap = %.6f, want %.6f (C_max − c_min)", gap, cmax-cmin)

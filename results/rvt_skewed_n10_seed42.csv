@@ -1,0 +1,13 @@
+metric,value
+sched,rvt
+workload,skewed
+n_agents,10
+total_calls,5000
+seed,42
+reconcile,true
+jain_index,0.999778
+p50_latency_s,1.404175
+p99_latency_s,8.971998
+starvation_events,163
+max_gap_ratio,0.666600
+thm1_satisfied,true

@@ -7,7 +7,7 @@ package baselines
 import (
 	"sync"
 
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 )
 
 // ─── FCFS (first-come, first-served) ─────────────────────────────────────────
@@ -205,17 +205,29 @@ func (r *RoundRobin) Stats() map[scheduler.AgentID]*scheduler.AgentStats {
 
 // ─── PromiseAll (no scheduling) ───────────────────────────────────────────────
 
-// PromiseAll dispatches every call immediately with no scheduling policy.
-// This models the framework-level "fire-and-forget" concurrency pattern.
+// PromiseAll dispatches calls with no fairness policy, bounded only by maxD (global
+// concurrency cap). Models the framework-level "fire-and-forget" pattern.
 type PromiseAll struct {
 	mu       sync.Mutex
 	services map[scheduler.AgentID]float64
+	queue    []*paEntry
+	inflight int
+	maxD     int
 	disp     scheduler.Dispatcher
 	nextID   int64
 }
 
-func NewPromiseAll(disp scheduler.Dispatcher) *PromiseAll {
-	return &PromiseAll{services: make(map[scheduler.AgentID]float64), disp: disp}
+type paEntry struct {
+	agentID scheduler.AgentID
+	call    *scheduler.Call
+}
+
+func NewPromiseAll(maxD int, disp scheduler.Dispatcher) *PromiseAll {
+	return &PromiseAll{
+		services: make(map[scheduler.AgentID]float64),
+		maxD:     maxD,
+		disp:     disp,
+	}
 }
 
 func (p *PromiseAll) AddAgent(id scheduler.AgentID) {
@@ -231,14 +243,35 @@ func (p *PromiseAll) Submit(agentID scheduler.AgentID, call *scheduler.Call) err
 		call.ID = p.nextID
 	}
 	call.AgentID = agentID
+	p.queue = append(p.queue, &paEntry{agentID, call})
+	dispatches := p.drain()
 	p.mu.Unlock()
-	return p.disp.Dispatch(agentID, call)
+	for _, e := range dispatches {
+		_ = p.disp.Dispatch(e.agentID, e.call)
+	}
+	return nil
+}
+
+func (p *PromiseAll) drain() []*paEntry {
+	var out []*paEntry
+	for p.inflight < p.maxD && len(p.queue) > 0 {
+		e := p.queue[0]
+		p.queue = p.queue[1:]
+		p.inflight++
+		out = append(out, e)
+	}
+	return out
 }
 
 func (p *PromiseAll) Complete(agentID scheduler.AgentID, _ int64, actualCost float64) error {
 	p.mu.Lock()
 	p.services[agentID] += actualCost
+	p.inflight--
+	dispatches := p.drain()
 	p.mu.Unlock()
+	for _, e := range dispatches {
+		_ = p.disp.Dispatch(e.agentID, e.call)
+	}
 	return nil
 }
 
@@ -259,10 +292,10 @@ func (p *PromiseAll) Stats() map[scheduler.AgentID]*scheduler.AgentStats {
 // A call is dispatched only when the bucket holds ≥ estimate tokens.
 // This is not work-conserving: idle agents don't share their unused rate.
 type TokenBucket struct {
-	mu       sync.Mutex
-	agents   map[scheduler.AgentID]*bucketState
-	disp     scheduler.Dispatcher
-	nextID   int64
+	mu     sync.Mutex
+	agents map[scheduler.AgentID]*bucketState
+	disp   scheduler.Dispatcher
+	nextID int64
 }
 
 type bucketState struct {

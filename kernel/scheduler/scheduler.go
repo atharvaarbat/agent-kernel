@@ -54,6 +54,10 @@ type Params struct {
 	EMax float64 // Ê_max: upper bound on estimate (A4)
 	CMin float64 // c_min: lower bound on actual cost (Corollary 2)
 
+	// GlobalMaxD caps total simultaneous in-flight calls across ALL agents
+	// (models a shared rate-limited provider). 0 = unlimited.
+	GlobalMaxD int
+
 	// ReconcileEnabled: if false, the RECONCILE step in COMPLETE is skipped.
 	// Setting this to false instantiates the Proposition 2 ablation.
 	ReconcileEnabled bool
@@ -101,8 +105,9 @@ type Scheduler struct {
 	estimator  Estimator
 	dispatcher Dispatcher
 
-	nextCallID int64
-	log        []LogEvent
+	nextCallID   int64
+	log          []LogEvent
+	globalFlight int // total in-flight across all agents (for Params.GlobalMaxD)
 
 	// I5 conservation counters.
 	totalCharged float64
@@ -224,9 +229,10 @@ func (s *Scheduler) Complete(agentID AgentID, callID int64, actualCost float64) 
 		ag.vtime += (actualCost - ê) / ag.weight
 	}
 
-	ag.pending -= ê  // P_i ← P_i − ê(c)
-	ag.inFlight--    // n_i ← n_i − 1
+	ag.pending -= ê       // P_i ← P_i − ê(c)
+	ag.inFlight--         // n_i ← n_i − 1
 	ag.service += actualCost // A_i ← A_i + a
+	s.globalFlight--
 
 	// I5 conservation tracking.
 	s.totalActual += actualCost
@@ -371,6 +377,11 @@ func (s *Scheduler) tryDispatchAll() []*Call {
 // tryDispatchOne implements the DISPATCH subroutine of Algorithm 1 (lines 10–23).
 // Called with s.mu held; returns the dispatched call (or nil if no candidate).
 func (s *Scheduler) tryDispatchOne() *Call {
+	// Global concurrency gate (models a rate-limited shared provider).
+	if s.params.GlobalMaxD > 0 && s.globalFlight >= s.params.GlobalMaxD {
+		return nil
+	}
+
 	// Cand = { i ∈ B : n_i < d ∧ queue_i ≠ ∅ ∧ admissible(i) }
 	var best *agentState
 	for _, ag := range s.agents {
@@ -400,6 +411,7 @@ func (s *Scheduler) tryDispatchOne() *Call {
 
 	s.inFlight[call.ID] = call
 	s.totalCharged += ê
+	s.globalFlight++
 
 	s.log = append(s.log, LogEvent{Type: "DISPATCH", AgentID: best.id, CallID: call.ID, Estimate: ê})
 	return call

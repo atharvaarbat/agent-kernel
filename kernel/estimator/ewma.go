@@ -2,7 +2,7 @@
 package estimator
 
 import (
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 )
 
 // EWMA implements an exponentially weighted moving average estimator.
@@ -12,9 +12,9 @@ import (
 // Setting ReconcileEnabled=false in scheduler.Params turns the scheduler into the
 // "estimate-only" ablation that instantiates Proposition 2.
 type EWMA struct {
-	alpha        float64            // smoothing factor ∈ (0,1]; default 0.1
-	prior        float64            // bootstrap value for agents with no history
-	maxTokenCost float64            // upper clamp: max_tokens * cost_per_output_token
+	alpha        float64 // smoothing factor ∈ (0,1]; default 0.1
+	prior        float64 // bootstrap value for agents with no history
+	maxTokenCost float64 // upper clamp: max_tokens * cost_per_output_token
 	state        map[scheduler.AgentID]float64
 }
 

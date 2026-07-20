@@ -1,0 +1,13 @@
+metric,value
+sched,rvt
+workload,tworesource
+n_agents,10
+total_calls,2000
+seed,42
+reconcile,true
+jain_index,0.998092
+p50_latency_s,2.182560
+p99_latency_s,22.068128
+starvation_events,9
+max_gap_ratio,6.710300
+thm1_satisfied,false

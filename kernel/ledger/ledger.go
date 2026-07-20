@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/atharva-arbat/agent-kernel/scheduler"
+	"github.com/atharvaarbat/agent-kernel/scheduler"
 )
 
 // BudgetVector holds the three scarce resources tracked per agent.
@@ -17,9 +17,9 @@ type BudgetVector struct {
 
 // AgentLedger is the per-agent budget entry.
 type AgentLedger struct {
-	Budget    BudgetVector // configured limit
-	Reserved  BudgetVector // currently held as reservation for in-flight calls
-	Consumed  BudgetVector // reconciled actuals (running total)
+	Budget   BudgetVector // configured limit
+	Reserved BudgetVector // currently held as reservation for in-flight calls
+	Consumed BudgetVector // reconciled actuals (running total)
 	// Metered is what the provider has reported (for I5 cross-check).
 	Metered BudgetVector
 }
