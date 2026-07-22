@@ -12,7 +12,7 @@ Theoretical foundation: [*The Agent Is a Process*](paper/paper.tex) introduces *
 # From the kernel directory
 cd kernel
 
-# Run the evaluation harness (e.g., skewed workload, 10 agents, RVT scheduler)
+# Run the evaluation harness (skewed workload, 10 agents, RVT scheduler)
 go run ./cmd/agentkernel-eval -workload skewed -n 10 -calls 5000 -seed 42 -sched rvt
 
 # Run the overhead benchmark (H0a gate)
@@ -38,16 +38,16 @@ The kernel enforces **complete mediation (I1)**: every model call, tool invocati
 
 | Package | Lines | Role |
 |---|---|---|
-| `scheduler/` | ~600 | Core RVT algorithm: virtual time, equalization, reconciliation, dispatch loop |
-| `baselines/` | ~200 | Comparison schedulers: FCFS, Round-Robin, PromiseAll, TokenBucket |
-| `estimator/` | ~100 | Per-agent EWMA cost estimator with clamped upper bound |
-| `ledger/` | ~150 | Per-agent and per-session budget accounting (I5 conservation) |
-| `metrics/` | ~150 | Jain fairness index, latency percentiles, gap ratio, starvation counts |
-| `mock/` | ~100 | Deterministic mock LLM provider (log-normal output lengths) |
-| `sim/` | ~400 | Discrete-event simulation driver with 6 workload kinds |
-| `wal/` | ~50 | Write-ahead log (I3: log-before-effect) |
-| `cmd/agentkernel-eval/` | ~200 | Experiment runner CLI |
-| `cmd/agentkernel-bench/` | ~100 | Overhead benchmark CLI |
+| `scheduler/` | ~356 | Core RVT algorithm: virtual time, equalization, reconciliation, dispatch loop |
+| `baselines/` | ~344 | Comparison schedulers: FCFS, Round-Robin, PromiseAll, TokenBucket |
+| `sim/` | ~227 | Discrete-event simulation driver with 6 workload kinds |
+| `metrics/` | ~189 | Jain fairness index, latency percentiles, gap ratio, starvation counts |
+| `mock/` | ~87 | Deterministic mock LLM provider (log-normal output lengths) |
+| `ledger/` | ~98 | Per-agent and per-session budget accounting (I5 conservation) |
+| `wal/` | ~74 | Write-ahead log (I3: log-before-effect) |
+| `estimator/` | ~64 | Per-agent EWMA cost estimator with clamped upper bound |
+| `cmd/agentkernel-eval/` | ~173 | Experiment runner CLI |
+| `cmd/agentkernel-bench/` | ~132 | Overhead benchmark CLI |
 
 ## The RVT Algorithm
 
@@ -98,18 +98,19 @@ Syscall surface: `infer`, `cancel`, `invoke`, `send`, `recv`, `clock`, `random`,
 
 ### `agentkernel-eval`
 
-Run one experiment configuration.
+Run one experiment configuration and write results to CSV.
 
 ```
 go run ./cmd/agentkernel-eval [flags]
 
 Flags:
   -workload string        Workload kind: uniform, skewed, adversarial, heavytail,
-                          mixedprio, tworesource (default "skewed")
+                          mixed, tworesource (default "uniform")
   -n int                  Number of agents (default 10)
-  -calls int              Total calls per run (default 5000)
+  -calls int              Total completions to simulate (default 1000)
   -seed int               PRNG seed (default 42)
   -sched string           Scheduler: rvt, fcfs, rr, promiseall (default "rvt")
+  -out string             Output CSV path (default "results/run.csv")
   -no-reconcile           Disable reconciliation (Proposition 2 ablation)
   -d int                  Max in-flight calls per agent (default 1)
   -global-concurrency int Global provider slot limit (default 1)
@@ -126,8 +127,10 @@ Measure scheduling overhead (H0a gate).
 go run ./cmd/agentkernel-bench [flags]
 
 Flags:
-  -n int          Number of agents (default 10)
-  -calls int      Total calls per benchmark (default 100000)
+  -n int                  Number of agents (default 10)
+  -calls int              Total calls per benchmark (default 50000)
+  -mean-latency-ms float  Mean LLM inference latency in ms for overhead % calculation (default 2000)
+  -out string             Output CSV path (default "results/bench.csv")
 ```
 
 ## Testing
@@ -153,7 +156,7 @@ The full paper is at [`paper/paper.tex`](paper/paper.tex). It includes:
 - The agent-process abstraction (§3) with the necessity-of-mediation proof (§3.3)
 - Reconciled Virtual Time (§4) with the fairness bound (§4.4) and negative results (§4.5)
 - Multi-resource DRF extension (§5)
-- Implementation description (§6, ~2400 lines of Go)
+- Implementation description (§6)
 - Evaluation (§7) with H0a/H1a/H1b results
 - Related work and threats to validity (§8, §9)
 
