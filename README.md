@@ -1,3 +1,4 @@
+![Banner](/banner.jpg)
 # AgentKernel
 
 **The Agent Is a Process: A Token-Fair Runtime for Multi-Agent LLM Systems**
